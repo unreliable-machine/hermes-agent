@@ -24,11 +24,13 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         run: |
-          # Get the merge base between this PR and main
-          MERGE_BASE=$(git merge-base origin/main HEAD)
+          # Pull requests compare from their actual event base SHA. Pushes keep
+          # the historical origin/main merge-base behavior. The helper validates
+          # and resolves the SHA before it reaches the revision expression.
+          COMPARISON_BASE=$(python3 scripts/ci/contributor_base.py)
 
           # Find any new author emails in this PR's commits
-          NEW_EMAILS=$(git log ${MERGE_BASE}..HEAD --format='%ae' --no-merges | sort -u)
+          NEW_EMAILS=$(git log --format='%ae' --no-merges "${COMPARISON_BASE}..HEAD" -- | sort -u)
 
           if [ -z "$NEW_EMAILS" ]; then
             echo "No new commits to check."
