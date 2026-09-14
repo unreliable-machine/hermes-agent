@@ -100,6 +100,7 @@ export interface ApprovalReq {
   choices?: string[]
   command: string
   description: string
+  requestId: string
   smartDenied?: boolean
 }
 
@@ -194,6 +195,14 @@ export interface SessionInfo {
   lazy?: boolean
   mcp_servers?: McpServerStatus[]
   model: string
+  pending_approval?: {
+    allow_permanent?: boolean
+    choices?: string[]
+    command?: string
+    description?: string
+    request_id?: string
+    smart_denied?: boolean
+  }
   profile_name?: string
   project?: null | ProjectInfo
   reasoning_effort?: string

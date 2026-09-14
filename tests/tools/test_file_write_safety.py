@@ -489,6 +489,21 @@ class TestProtectedInstructionFiles:
         assert res.get("error") and "BLOCKED" in res["error"]
         assert not target.exists()
 
+    def test_single_query_never_invokes_cli_approval_callback(
+        self, tmp_path, approvals, monkeypatch
+    ):
+        """Headless ``-q`` workers must fail closed without an invisible wait."""
+        monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+        approvals["answer"] = "once"
+
+        target = tmp_path / "AGENTS.md"
+        res = self._write(target)
+
+        assert res.get("error") and "unattended worker" in res["error"]
+        assert "Surface this blocked action" in res["error"]
+        assert approvals["calls"] == []
+        assert not target.exists()
+
     def test_config_disabled_skips_gate(self, tmp_path, approvals, monkeypatch):
         import tools.file_tools_write_guards as ft
         monkeypatch.setattr(
@@ -688,6 +703,32 @@ class TestProtectedInstructionFiles:
             approval_context.reset_current_session_key(token)
 
         assert rendered["choices"] == ["once", "deny"]
+
+    def test_gateway_scoped_choice_cannot_grant_protected_write(self, tmp_path):
+        import tools.approval as A
+        from tools import approval_context
+
+        session_key = "protected-files-forged-scope"
+        token = approval_context.set_current_session_key(session_key)
+        try:
+            def notify(approval_data):
+                A.resolve_gateway_approval(
+                    session_key,
+                    "always",
+                    request_id=approval_data["request_id"],
+                )
+
+            A.register_gateway_notify(session_key, notify)
+            try:
+                target = tmp_path / "AGENTS.md"
+                res = self._write(target, "must not land")
+            finally:
+                A.unregister_gateway_notify(session_key)
+        finally:
+            approval_context.reset_current_session_key(token)
+
+        assert res.get("error") and "denied" in res["error"]
+        assert not target.exists()
 
 
 class TestMultiplexProfileWriteGuardsAreProfileScoped:

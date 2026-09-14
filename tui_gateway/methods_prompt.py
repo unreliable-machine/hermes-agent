@@ -1183,6 +1183,8 @@ def _approval_respond_session_fallback(params: dict):
 
 @method("approval.respond")
 def _(rid, params: dict) -> dict:
+    if not isinstance(request_id := params.get("request_id"), str) or not request_id:
+        return _err(rid, 4006, "request_id required")
     session, err = _sess(params, rid)
     if err:
         # Session-not-found (4001) only: resolve by durable identity before failing.
@@ -1195,7 +1197,7 @@ def _(rid, params: dict) -> dict:
         rid, "resolved",
         lambda a: a.resolve_gateway_approval(
             session["session_key"], params.get("choice", "deny"),
-            resolve_all=params.get("all", False), request_id=params.get("request_id")))
+            resolve_all=params.get("all", False), request_id=request_id))
 
 
 def register(server) -> None:
