@@ -22,6 +22,7 @@ import { type GatewayClient } from '../gatewayClient.js'
 import type { SubagentListResponse } from '../gatewayTypes.js'
 import type {
   AnyGatewayEvent,
+  ApprovalRespondResponse,
   ClarifyRespondResponse,
   ConfigSetResponse,
   SessionActiveListResponse,
@@ -48,6 +49,7 @@ import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 
 import { applyAgentSnapshot } from './agentRoster.js'
+import { approvalResponseResolved } from './approvalResponse.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import { planGatewayRecovery } from './gatewayRecovery.js'
@@ -1026,13 +1028,23 @@ export function useMainApp(gw: GatewayClient) {
         return
       }
 
-      return respondWith('approval.respond', { choice, request_id: overlay.approval.requestId, session_id: ui.sid }, () => {
+      return rpc<ApprovalRespondResponse>('approval.respond', {
+        choice,
+        request_id: overlay.approval.requestId,
+        session_id: ui.sid
+      }).then(response => {
+        if (!approvalResponseResolved(response)) {
+          sys('approval response was not resolved; the request may be expired or belong to another session')
+
+          return
+        }
+
         patchOverlayState({ approval: null })
         patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
         patchUiState({ status: 'running…' })
       })
     },
-    [overlay.approval, respondWith, ui.sid]
+    [overlay.approval, rpc, sys, ui.sid]
   )
 
   const answerSudo = useCallback(

@@ -18,6 +18,7 @@ import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
 import { closeWidget, dispatchWidgetInput } from '../sdk/host.js'
 
 import { $agentDockCollapsed } from './agentRoster.js'
+import { approvalResponseResolved } from './approvalResponse.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import {
   type GatewayRpc,
@@ -234,7 +235,16 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
           request_id: overlay.approval.requestId,
           session_id: getUiState().sid
         })
-        .then(r => r && (patchOverlayState({ approval: null }), patchTurnState({ outcome: 'denied' })))
+        .then(response => {
+          if (!approvalResponseResolved(response)) {
+            actions.sys('approval denial was not resolved; the request may be expired or belong to another session')
+
+            return
+          }
+
+          patchOverlayState({ approval: null })
+          patchTurnState({ outcome: 'denied' })
+        })
     }
 
     if (overlay.sudo || overlay.secret || overlay.vaultUnlock) {

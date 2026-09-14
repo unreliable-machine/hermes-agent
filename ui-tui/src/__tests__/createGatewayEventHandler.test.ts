@@ -1329,6 +1329,28 @@ describe('createGatewayEventHandler', () => {
     )
   })
 
+  it('removes an expired approval when the authoritative session snapshot has none', () => {
+    patchUiState({ sid: 'focused' })
+    patchOverlayState({
+      approval: {
+        choices: ['once', 'deny'],
+        command: '<write>',
+        description: 'protected',
+        requestId: 'req-expired'
+      }
+    })
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      session_id: 'focused',
+      payload: { model: 'test', running: false, skills: {}, tools: {} },
+      type: 'session.info'
+    } as any)
+
+    expect(getOverlayState().approval).toBeNull()
+    expect(getTurnState().outcome).not.toMatch(/approved|denied/)
+  })
+
   it('still surfaces terminal turn failures as errors', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))

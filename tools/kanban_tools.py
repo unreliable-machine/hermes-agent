@@ -176,6 +176,34 @@ def _worker_run_id(task_id: str) -> Optional[int]:
         return None
 
 
+def block_current_worker_for_protected_write(action: str) -> bool:
+    """Fail an unattended worker into the existing visible lifecycle.
+
+    This is the security-boundary bridge for a protected write that cannot
+    present an approval UI. It never grants or retries the write; it only
+    records ``needs_input`` against the exact dispatcher-owned run so the
+    existing Kanban notifier can surface the blocked action to its operator.
+    """
+    tid = _default_task_id(None)
+    if not tid or not _is_dispatcher_owned_worker():
+        return False
+    run_id = _worker_run_id(tid)
+    if run_id is None:
+        return False
+    reason = _redact(
+        f"Protected write requires interactive one-operation approval: "
+        f"task={tid} run={run_id} action={action}. The write was denied and was not retried."
+    )
+    try:
+        with _board(None, quiet_close=True) as (kb, conn):
+            return bool(kb.block_task(
+                conn, tid, reason=reason, kind="needs_input", expected_run_id=run_id
+            ))
+    except Exception:
+        logger.exception("failed to block unattended Kanban protected write")
+        return False
+
+
 def _stamp_worker_session_metadata(task_id: str, metadata: Optional[dict]) -> Optional[dict]:
     """Add trusted worker session id metadata for this worker's own task."""
     session_id = _own_task_env(task_id, "HERMES_SESSION_ID")

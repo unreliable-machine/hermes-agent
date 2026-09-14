@@ -447,6 +447,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
     if (!requestId) {
       setStatus('approval delivery failed')
+
       return
     }
 
@@ -842,6 +843,12 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         if (info.pending_approval) {
           showApproval(info.pending_approval)
+        } else if (info.running === false && getOverlayState().approval) {
+          // session.info is the authoritative reconnect/timeout snapshot. If
+          // the backend no longer has this request, remove the stale control;
+          // absence is never consent and no approval outcome is recorded.
+          patchOverlayState({ approval: null })
+          setStatus(info.running ? 'running…' : 'ready')
         }
 
         return
