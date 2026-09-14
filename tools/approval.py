@@ -17,7 +17,7 @@ import importlib
 import logging
 import os
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 from utils import env_var_enabled, is_truthy_value
 from tools import approval_context
@@ -117,13 +117,20 @@ def _denial_breaker_addendum(session_key: str) -> str:
 # instead of only hearing "denied". Ported from qwibitai/nanoclaw#2832.
 _gateway_queues: dict[str, list] = {}        # session_key → [_ApprovalEntry, …]
 _gateway_notify_cbs: dict[str, object] = {}  # session_key → callable(approval_data)
+_gateway_expire_cbs: dict[str, Callable[[str], None]] = {}
 
 
-def register_gateway_notify(session_key: str, cb) -> None:
+def register_gateway_notify(
+    session_key: str, cb, expire_cb: Optional[Callable[[str], None]] = None
+) -> None:
     """Register ``cb(approval_data: dict) -> None`` for sending approval requests. The callback
     bridges sync→async: it runs in the agent thread and must schedule the send on the loop."""
     with _lock:
         _gateway_notify_cbs[session_key] = cb
+        if expire_cb is not None:
+            _gateway_expire_cbs[session_key] = expire_cb
+        else:
+            _gateway_expire_cbs.pop(session_key, None)
 
 
 def unregister_gateway_notify(session_key: str) -> None:
@@ -131,6 +138,7 @@ def unregister_gateway_notify(session_key: str) -> None:
     they don't hang forever (agent run finished or interrupted)."""
     with _lock:
         _gateway_notify_cbs.pop(session_key, None)
+        _gateway_expire_cbs.pop(session_key, None)
         entries = _gateway_queues.pop(session_key, [])
     for entry in entries:
         entry.event.set()

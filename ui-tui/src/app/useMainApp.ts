@@ -73,6 +73,30 @@ const BRACKET_PASTE_ON = '\x1b[?2004h'
 const BRACKET_PASTE_OFF = '\x1b[?2004l'
 const MAX_HEIGHT_CACHE_BUCKETS = 12
 
+export async function answerApprovalRequest(
+  rpc: GatewayRpc,
+  choice: string,
+  requestId: string,
+  sessionId: null | string,
+  sys: (message: string) => void
+): Promise<void> {
+  const response = await rpc<ApprovalRespondResponse>('approval.respond', {
+    choice,
+    request_id: requestId,
+    session_id: sessionId
+  })
+
+  if (!approvalResponseResolved(response)) {
+    sys('approval response was not resolved; the request may be expired or belong to another session')
+
+    return
+  }
+
+  patchOverlayState({ approval: null })
+  patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
+  patchUiState({ status: 'running…' })
+}
+
 const statusColorOf = (status: string, t: { error: string; muted: string; ok: string; warn: string }) => {
   if (status === 'ready') {
     return t.ok
@@ -1028,21 +1052,7 @@ export function useMainApp(gw: GatewayClient) {
         return
       }
 
-      return rpc<ApprovalRespondResponse>('approval.respond', {
-        choice,
-        request_id: overlay.approval.requestId,
-        session_id: ui.sid
-      }).then(response => {
-        if (!approvalResponseResolved(response)) {
-          sys('approval response was not resolved; the request may be expired or belong to another session')
-
-          return
-        }
-
-        patchOverlayState({ approval: null })
-        patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
-        patchUiState({ status: 'running…' })
-      })
+      return answerApprovalRequest(rpc, choice, overlay.approval.requestId, ui.sid, sys)
     },
     [overlay.approval, rpc, sys, ui.sid]
   )

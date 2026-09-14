@@ -1726,6 +1726,21 @@ describe('createGatewayEventHandler', () => {
     expect(getOverlayState().sudo).toBeNull()
   })
 
+  it('clears only the matching approval at the backend timeout boundary', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      payload: { command: 'rm -rf .git', request_id: 'approval-new' },
+      type: 'approval.request'
+    } as any)
+    onEvent({ payload: { request_id: 'approval-old' }, type: 'approval.expire' } as any)
+    expect(getOverlayState().approval?.requestId).toBe('approval-new')
+
+    onEvent({ payload: { request_id: 'approval-new' }, type: 'approval.expire' } as any)
+    expect(getOverlayState().approval).toBeNull()
+    expect(getTurnState().outcome).toBe('')
+  })
+
   // ── Batch (multi-question) clarify ─────────────────────────────────
 
   it('parses a batch clarify.request into a questions overlay', () => {

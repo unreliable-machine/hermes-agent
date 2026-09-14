@@ -115,9 +115,10 @@ class TestDetectDangerousRm:
 
 
     def test_nonrecursive_verification_artifact_cleanup_is_not_dangerous(self):
-        with mock_patch("tempfile.gettempdir", return_value="/tmp"):
+        temp_dir = os.path.realpath("/tmp")
+        with mock_patch("tempfile.gettempdir", return_value=temp_dir):
             for prefix in ("hermes-verify-", "hermes-ad-hoc-"):
-                assert detect_dangerous_command(f"rm -f /tmp/{prefix}example.py") == (
+                assert detect_dangerous_command(f"rm -f {temp_dir}/{prefix}example.py") == (
                     False,
                     None,
                     None,
@@ -1403,9 +1404,9 @@ class TestApprovalTimeoutIsNotConsent:
         """Reset module state and force a tight approval timeout for fast tests."""
         from tools import approval as mod
         from tools import approval_context
-        from tools import approval_context
         mod._gateway_queues.clear()
         mod._gateway_notify_cbs.clear()
+        mod._gateway_expire_cbs.clear()
         mod._session_approved.clear()
         mod._permanent_approved.clear()
         mod._pending.clear()
@@ -1429,6 +1430,7 @@ class TestApprovalTimeoutIsNotConsent:
         from tools import approval as mod
         mod._gateway_queues.clear()
         mod._gateway_notify_cbs.clear()
+        mod._gateway_expire_cbs.clear()
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -1550,6 +1552,38 @@ class TestApprovalTimeoutIsNotConsent:
         assert last_post.get("choice") == "timeout", (
             f"hook choice should be 'timeout' on no-response, got {last_post.get('choice')!r}"
         )
+
+    def test_timeout_notifies_surface_to_expire_exact_request(self, monkeypatch):
+        """Queue expiry immediately retracts the exact rendered approval."""
+        from tools import approval as mod
+
+        expired = []
+        notified = []
+        mod.register_gateway_notify(
+            self.SESSION_KEY,
+            notified.append,
+            expire_cb=expired.append,
+        )
+        monkeypatch.setattr(
+            "tools.approval_gateway_wait._poll_event",
+            lambda *_args, **_kwargs: "timeout",
+        )
+
+        decision = mod._await_gateway_decision(
+            self.SESSION_KEY,
+            mod._gateway_notify_cb(self.SESSION_KEY),
+            {
+                "command": "rm -rf .git",
+                "description": "recursive delete",
+                "pattern_key": "dangerous",
+                "pattern_keys": ["dangerous"],
+            },
+        )
+
+        assert decision["resolved"] is False
+        assert decision["choice"] is None
+        assert expired == [notified[0]["request_id"]]
+        assert self.SESSION_KEY not in mod._gateway_queues
 
     def test_notify_failure_emits_post_hook_and_cleans_up(self, monkeypatch):
         """A failed notification still terminates the approval lifecycle."""

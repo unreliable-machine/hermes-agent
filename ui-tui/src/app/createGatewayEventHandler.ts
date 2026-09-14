@@ -1343,6 +1343,14 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         return
       }
 
+      case 'approval.expire': {
+        const expired = ev.payload?.request_id
+
+        patchOverlayState(prev => (prev.approval?.requestId === expired ? { ...prev, approval: null } : prev))
+
+        return
+      }
+
       case 'sudo.request':
         if (!ev.payload) {
           return

@@ -695,6 +695,11 @@ def _notify_approval_request(sid: str, data: dict | None) -> None:
         raise ConnectionError("approval request transport rejected the frame")
 
 
+def _notify_approval_expired(sid: str, request_id: str) -> None:
+    """Retract exactly the request whose backend wait expired."""
+    _emit("approval.expire", sid, {"request_id": request_id})
+
+
 def _status_update(sid: str, kind: str, text: str | None = None):
     if not (body := (text if text is not None else kind).strip()):
         return
@@ -935,7 +940,11 @@ def _wire_session_agent(sid: str, key: str, agent) -> bool:
     notify_registered = False
     with contextlib.suppress(Exception):
         from tools.approval import load_permanent_allowlist, register_gateway_notify
-        register_gateway_notify(key, lambda data: _notify_approval_request(sid, data))
+        register_gateway_notify(
+            key,
+            lambda data: _notify_approval_request(sid, data),
+            lambda request_id: _notify_approval_expired(sid, request_id),
+        )
         notify_registered = True
         load_permanent_allowlist()
     _wire_callbacks(sid)

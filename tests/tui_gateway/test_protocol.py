@@ -185,6 +185,20 @@ def test_approval_notify_rejects_failed_transport(server, monkeypatch):
         server._notify_approval_request("ui-session", {"request_id": "req-1"})
 
 
+def test_approval_timeout_emits_exact_expiry_event(server, monkeypatch):
+    """The gateway retracts only the request whose backend wait expired."""
+    emitted = []
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda event, sid, payload: emitted.append((event, sid, payload)) or True,
+    )
+
+    server._notify_approval_expired("ui-session", "req-1")
+
+    assert emitted == [("approval.expire", "ui-session", {"request_id": "req-1"})]
+
+
 def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     """A reattached client receives the approval that was emitted while detached."""
     from tools import approval

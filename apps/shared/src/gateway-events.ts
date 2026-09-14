@@ -337,6 +337,10 @@ export interface ApprovalRequestPayload {
   smart_denied?: boolean
 }
 
+export interface ApprovalExpirePayload {
+  request_id: string
+}
+
 export interface SudoRequestPayload {
   request_id: string
 }
@@ -397,6 +401,7 @@ export interface TerminalClosePayload {
  */
 export const BACKEND_EVENT_NAMES = [
   'agent.terminal.output',
+  'approval.expire',
   'approval.request',
   'background.complete',
   'billing.step_up.verification',
@@ -494,6 +499,7 @@ export type BackendGatewayEventName = (typeof BACKEND_EVENT_NAMES)[number]
 /** Payload per backend-emitted notification `type`. Keys are exactly `BACKEND_EVENT_NAMES`. */
 export interface BackendGatewayEventMap {
   'agent.terminal.output': TerminalOutputPayload
+  'approval.expire': ApprovalExpirePayload
   'approval.request': ApprovalRequestPayload
   'background.complete': SideAgentCompletePayload
   'billing.step_up.verification': BillingStepUpVerificationPayload
