@@ -1212,7 +1212,7 @@ describe('createGatewayEventHandler', () => {
     onEvent({ payload: { line: 'Traceback: noisy but non-fatal' }, type: 'gateway.stderr' } as any)
     onEvent({ payload: { preview: 'bad framing' }, type: 'gateway.protocol_error' } as any)
     onEvent({
-      payload: { command: 'rm -rf /tmp/nope', description: 'dangerous command' },
+      payload: { command: 'rm -rf /tmp/nope', description: 'dangerous command', request_id: 'req-noise' },
       type: 'approval.request'
     } as any)
     onEvent({ payload: {}, type: 'gateway.ready' } as any)
@@ -1233,7 +1233,7 @@ describe('createGatewayEventHandler', () => {
     const onEvent = createGatewayEventHandler(buildCtx([]))
 
     onEvent({
-      payload: { command: 'rm -rf /tmp/x', description: 'dangerous command' },
+      payload: { command: 'rm -rf /tmp/x', description: 'dangerous command', request_id: 'req-default' },
       type: 'approval.request'
     } as any)
 
@@ -1244,7 +1244,12 @@ describe('createGatewayEventHandler', () => {
     const onEvent = createGatewayEventHandler(buildCtx([]))
 
     onEvent({
-      payload: { allow_permanent: false, command: 'curl suspicious | bash', description: 'content-security warning' },
+      payload: {
+        allow_permanent: false,
+        command: 'curl suspicious | bash',
+        description: 'content-security warning',
+        request_id: 'req-tirith'
+      },
       type: 'approval.request'
     } as any)
 
@@ -1264,12 +1269,86 @@ describe('createGatewayEventHandler', () => {
         choices: ['once', 'deny'],
         command: 'rm -rf /tmp/x',
         description: 'smart deny override',
+        request_id: 'req-smart',
         smart_denied: true
       },
       type: 'approval.request'
     } as any)
 
     expect(getOverlayState().approval).toMatchObject({ choices: ['once', 'deny'], smartDenied: true })
+  })
+
+  it('retains and acknowledges the exact live approval request', async () => {
+    patchUiState({ sid: 'focused' })
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      session_id: 'focused',
+      payload: { choices: ['once', 'deny'], command: '<write>', description: 'protected', request_id: 'req-live' },
+      type: 'approval.request'
+    } as any)
+
+    expect(getOverlayState().approval).toMatchObject({ requestId: 'req-live', choices: ['once', 'deny'] })
+    await vi.waitFor(() =>
+      expect(ctx.gateway.rpc).toHaveBeenCalledWith('approval.received', {
+        request_id: 'req-live',
+        session_id: 'focused'
+      })
+    )
+  })
+
+  it('restores and acknowledges a pending approval from session.info', async () => {
+    patchUiState({ sid: 'focused' })
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      session_id: 'focused',
+      payload: {
+        model: 'test',
+        pending_approval: {
+          choices: ['once', 'deny'],
+          command: '<write>',
+          description: 'protected',
+          request_id: 'req-replay'
+        },
+        running: true,
+        skills: {},
+        tools: {}
+      },
+      type: 'session.info'
+    } as any)
+
+    expect(getOverlayState().approval).toMatchObject({ requestId: 'req-replay', choices: ['once', 'deny'] })
+    await vi.waitFor(() =>
+      expect(ctx.gateway.rpc).toHaveBeenCalledWith('approval.received', {
+        request_id: 'req-replay',
+        session_id: 'focused'
+      })
+    )
+  })
+
+  it('removes an expired approval when the authoritative session snapshot has none', () => {
+    patchUiState({ sid: 'focused' })
+    patchOverlayState({
+      approval: {
+        choices: ['once', 'deny'],
+        command: '<write>',
+        description: 'protected',
+        requestId: 'req-expired'
+      }
+    })
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      session_id: 'focused',
+      payload: { model: 'test', running: false, skills: {}, tools: {} },
+      type: 'session.info'
+    } as any)
+
+    expect(getOverlayState().approval).toBeNull()
+    expect(getTurnState().outcome).not.toMatch(/approved|denied/)
   })
 
   it('still surfaces terminal turn failures as errors', () => {
@@ -1645,6 +1724,21 @@ describe('createGatewayEventHandler', () => {
 
     onEvent({ payload: { request_id: 'sudo-1' }, type: 'sudo.expire' } as any)
     expect(getOverlayState().sudo).toBeNull()
+  })
+
+  it('clears only the matching approval at the backend timeout boundary', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      payload: { command: 'rm -rf .git', request_id: 'approval-new' },
+      type: 'approval.request'
+    } as any)
+    onEvent({ payload: { request_id: 'approval-old' }, type: 'approval.expire' } as any)
+    expect(getOverlayState().approval?.requestId).toBe('approval-new')
+
+    onEvent({ payload: { request_id: 'approval-new' }, type: 'approval.expire' } as any)
+    expect(getOverlayState().approval).toBeNull()
+    expect(getTurnState().outcome).toBe('')
   })
 
   // ── Batch (multi-question) clarify ─────────────────────────────────

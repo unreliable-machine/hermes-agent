@@ -680,13 +680,24 @@ def _pending_approval_request_payload(session_key: str) -> dict | None:
     return _approval_request_payload(approval) if approval else None
 
 
-def _emit_approval_request(sid: str, data: dict | None) -> None:
+def _emit_approval_request(sid: str, data: dict | None) -> bool:
     """Emit ``approval.request`` with the command redacted: a credential-shaped value Tirith flagged would
     otherwise echo verbatim to the TUI (third egress alongside chat platforms and the SSE/API stream).
 
     Reuse the shared gateway See #48456, #50767.
     """
-    _emit("approval.request", sid, _approval_request_payload(data))
+    return _emit("approval.request", sid, _approval_request_payload(data))
+
+
+def _notify_approval_request(sid: str, data: dict | None) -> None:
+    """Bridge the blocking approval gate to the client or fail immediately."""
+    if not _emit_approval_request(sid, data):
+        raise ConnectionError("approval request transport rejected the frame")
+
+
+def _notify_approval_expired(sid: str, request_id: str) -> None:
+    """Retract exactly the request whose backend wait expired."""
+    _emit("approval.expire", sid, {"request_id": request_id})
 
 
 def _status_update(sid: str, kind: str, text: str | None = None):
@@ -929,7 +940,11 @@ def _wire_session_agent(sid: str, key: str, agent) -> bool:
     notify_registered = False
     with contextlib.suppress(Exception):
         from tools.approval import load_permanent_allowlist, register_gateway_notify
-        register_gateway_notify(key, lambda data: _emit_approval_request(sid, data))
+        register_gateway_notify(
+            key,
+            lambda data: _notify_approval_request(sid, data),
+            lambda request_id: _notify_approval_expired(sid, request_id),
+        )
         notify_registered = True
         load_permanent_allowlist()
     _wire_callbacks(sid)

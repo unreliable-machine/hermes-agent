@@ -1,5 +1,6 @@
 [
   "agent.terminal.output",
+  "approval.expire",
   "approval.request",
   "background.complete",
   "billing.step_up.verification",

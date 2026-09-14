@@ -321,7 +321,7 @@ export interface ClarifyRespondResponse {
 }
 
 export interface ApprovalRespondResponse {
-  ok?: boolean
+  resolved: number
 }
 
 export interface SudoRespondResponse {

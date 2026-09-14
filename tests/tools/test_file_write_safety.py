@@ -396,6 +396,13 @@ class TestProtectedInstructionFiles:
     @pytest.fixture(autouse=True)
     def _gate_on(self, monkeypatch):
         import tools.file_tools_write_guards as ft
+        for name in (
+            "HERMES_KANBAN_BOARD",
+            "HERMES_KANBAN_DB",
+            "HERMES_KANBAN_RUN_ID",
+            "HERMES_KANBAN_TASK",
+        ):
+            monkeypatch.delenv(name, raising=False)
         monkeypatch.setattr(
             ft, "_protected_instruction_config", lambda: (True, [])
         )
@@ -488,6 +495,68 @@ class TestProtectedInstructionFiles:
         res = self._write(target)
         assert res.get("error") and "BLOCKED" in res["error"]
         assert not target.exists()
+
+    def test_single_query_never_invokes_cli_approval_callback(
+        self, tmp_path, approvals, monkeypatch
+    ):
+        """Headless ``-q`` workers must fail closed without an invisible wait."""
+        monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+        approvals["answer"] = "once"
+
+        target = tmp_path / "AGENTS.md"
+        res = self._write(target)
+
+        assert res.get("error") and "unattended worker" in res["error"]
+        assert "denied without waiting" in res["error"]
+        assert approvals["calls"] == []
+        assert not target.exists()
+
+    def test_single_query_blocks_exact_kanban_run_for_operator_notification(
+        self, tmp_path, approvals, monkeypatch
+    ):
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_db_connect as kbc
+        from hermes_cli import kanban_db_notify as kbn
+
+        db_path = tmp_path / "kanban.db"
+        monkeypatch.setenv("HERMES_KANBAN_DB", str(db_path))
+        kb.init_db()
+        conn = kbc.connect()
+        task_id = kb.create_task(conn, title="protected write", assignee="worker")
+        kbn.add_notify_sub(conn, task_id=task_id, platform="telegram", chat_id="operator")
+        claimed = kb.claim_task(conn, task_id, claimer="test:worker")
+        assert claimed is not None and claimed.current_run_id is not None
+        run_id = claimed.current_run_id
+        conn.close()
+
+        monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
+        monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
+        monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+        target = tmp_path / "AGENTS.md"
+
+        res = self._write(target)
+
+        assert res.get("error") and "needs_input" in res["error"]
+        assert approvals["calls"] == []
+        assert not target.exists()
+        conn = kbc.connect()
+        task = kb.get_task(conn, task_id)
+        assert task is not None and task.status == "blocked"
+        blocked = [event for event in kb.list_events(conn, task_id) if event.kind == "blocked"][-1]
+        assert blocked.payload is not None
+        assert blocked.payload["kind"] == "needs_input"
+        assert f"task={task_id}" in blocked.payload["reason"]
+        assert f"run={run_id}" in blocked.payload["reason"]
+        assert "action=protected-write:AGENTS.md" in blocked.payload["reason"]
+        _, unseen = kbn.unseen_events_for_sub(
+            conn,
+            task_id=task_id,
+            platform="telegram",
+            chat_id="operator",
+            kinds=["blocked"],
+        )
+        assert [event.kind for event in unseen] == ["blocked"]
+        conn.close()
 
     def test_config_disabled_skips_gate(self, tmp_path, approvals, monkeypatch):
         import tools.file_tools_write_guards as ft
@@ -688,6 +757,32 @@ class TestProtectedInstructionFiles:
             approval_context.reset_current_session_key(token)
 
         assert rendered["choices"] == ["once", "deny"]
+
+    def test_gateway_scoped_choice_cannot_grant_protected_write(self, tmp_path):
+        import tools.approval as A
+        from tools import approval_context
+
+        session_key = "protected-files-forged-scope"
+        token = approval_context.set_current_session_key(session_key)
+        try:
+            def notify(approval_data):
+                A.resolve_gateway_approval(
+                    session_key,
+                    "always",
+                    request_id=approval_data["request_id"],
+                )
+
+            A.register_gateway_notify(session_key, notify)
+            try:
+                target = tmp_path / "AGENTS.md"
+                res = self._write(target, "must not land")
+            finally:
+                A.unregister_gateway_notify(session_key)
+        finally:
+            approval_context.reset_current_session_key(token)
+
+        assert res.get("error") and "denied" in res["error"]
+        assert not target.exists()
 
 
 class TestMultiplexProfileWriteGuardsAreProfileScoped:

@@ -256,6 +256,19 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
             return blocked.format(why="requires approval but the approval request could not be delivered.")
         choice, timed = decision.get("choice"), not decision.get("resolved")
     else:
+        # A single-query worker can register a CLI callback without having a
+        # human at its stdin. Never send protected approvals into that dead end.
+        from tools.approval_context import _is_single_query_approval_context
+        if _is_single_query_approval_context():
+            from tools.kanban_tools import block_current_worker_for_protected_write
+
+            lifecycle = ""
+            if block_current_worker_for_protected_write(f"protected-write:{targets}"):
+                lifecycle = " The task was blocked as needs_input and its operator notification was queued."
+            return blocked.format(why=(
+                "requires a one-operation approval in an interactive session; "
+                "this unattended worker cannot present an approval prompt. "
+                f"The write was denied without waiting.{lifecycle}"))
         # CLI surface: per-thread approval callback (prompt_toolkit panel).
         try:
             from tools.terminal_tool import _get_approval_callback
@@ -269,8 +282,9 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
         choice = prompt_dangerous_approval(
             display, description, allow_permanent=False, allow_session=False, approval_callback=callback)
         timed = choice == "timeout"
-    # Any tapped scope is a one-operation grant; nothing is persisted.
-    if not timed and choice in {"once", "session", "always"}:
+    # Protected writes accept only the exact one-operation grant advertised by
+    # their prompt. A forged/stale scoped response must fail closed.
+    if not timed and choice == "once":
         return None
     return timed_out if timed else denied
 

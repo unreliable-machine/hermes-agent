@@ -435,6 +435,37 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     }
   }
 
+  const showApproval = (payload: {
+    allow_permanent?: boolean
+    choices?: string[]
+    command?: string
+    description?: string
+    request_id?: string
+    smart_denied?: boolean
+  }) => {
+    const requestId = payload.request_id
+
+    if (!requestId) {
+      setStatus('approval delivery failed')
+
+      return
+    }
+
+    patchOverlayState({
+      approval: {
+        allowPermanent: payload.allow_permanent !== false,
+        choices: payload.choices,
+        command: String(payload.command ?? ''),
+        description: String(payload.description ?? 'dangerous command'),
+        requestId,
+        smartDenied: payload.smart_denied === true
+      }
+    })
+    setStatus('approval needed')
+    ringPromptBell()
+    void rpc('approval.received', { request_id: requestId, session_id: getUiState().sid })
+  }
+
   const { appendMessage, panel, setHistoryItems } = ctx.transcript
   const { setInput } = ctx.composer
   const { submitLiteralRef, submitRef } = ctx.submission
@@ -809,6 +840,16 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         }))
 
         setHistoryItems(prev => prev.map(m => (m.kind === 'intro' ? { ...m, info } : m)))
+
+        if (info.pending_approval) {
+          showApproval(info.pending_approval)
+        } else if (info.running === false && getOverlayState().approval) {
+          // session.info is the authoritative reconnect/timeout snapshot. If
+          // the backend no longer has this request, remove the stale control;
+          // absence is never consent and no approval outcome is recorded.
+          patchOverlayState({ approval: null })
+          setStatus(info.running ? 'running…' : 'ready')
+        }
 
         return
       }
@@ -1297,21 +1338,15 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           return
         }
 
-        const description = String(ev.payload.description ?? 'dangerous command')
-        // Only an explicit false (tirith warning) drops the permanent-allow option.
-        const allowPermanent = ev.payload.allow_permanent !== false
+        showApproval(ev.payload)
 
-        patchOverlayState({
-          approval: {
-            allowPermanent,
-            choices: ev.payload.choices,
-            command: String(ev.payload.command ?? ''),
-            description,
-            smartDenied: ev.payload.smart_denied === true
-          }
-        })
-        setStatus('approval needed')
-        ringPromptBell()
+        return
+      }
+
+      case 'approval.expire': {
+        const expired = ev.payload?.request_id
+
+        patchOverlayState(prev => (prev.approval?.requestId === expired ? { ...prev, approval: null } : prev))
 
         return
       }

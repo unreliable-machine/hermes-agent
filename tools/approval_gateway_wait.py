@@ -164,4 +164,12 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         entry.result = "deny"
         entry.event.set()
     _drop_entry()
+    if state == "timeout":
+        with _approval._lock:
+            expire_cb = _approval._gateway_expire_cbs.get(session_key)
+        if expire_cb is not None:
+            try:
+                expire_cb(str(entry.data.get("request_id") or ""))
+            except Exception:
+                logger.warning("Gateway approval expiry notify failed", exc_info=True)
     return _finish(payload, state != "timeout", entry.result, entry.reason)

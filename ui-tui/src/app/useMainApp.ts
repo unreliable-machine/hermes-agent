@@ -22,6 +22,7 @@ import { type GatewayClient } from '../gatewayClient.js'
 import type { SubagentListResponse } from '../gatewayTypes.js'
 import type {
   AnyGatewayEvent,
+  ApprovalRespondResponse,
   ClarifyRespondResponse,
   ConfigSetResponse,
   SessionActiveListResponse,
@@ -48,6 +49,7 @@ import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 
 import { applyAgentSnapshot } from './agentRoster.js'
+import { approvalResponseResolved } from './approvalResponse.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import { planGatewayRecovery } from './gatewayRecovery.js'
@@ -70,6 +72,30 @@ import { useSubmission } from './useSubmission.js'
 const BRACKET_PASTE_ON = '\x1b[?2004h'
 const BRACKET_PASTE_OFF = '\x1b[?2004l'
 const MAX_HEIGHT_CACHE_BUCKETS = 12
+
+export async function answerApprovalRequest(
+  rpc: GatewayRpc,
+  choice: string,
+  requestId: string,
+  sessionId: null | string,
+  sys: (message: string) => void
+): Promise<void> {
+  const response = await rpc<ApprovalRespondResponse>('approval.respond', {
+    choice,
+    request_id: requestId,
+    session_id: sessionId
+  })
+
+  if (!approvalResponseResolved(response)) {
+    sys('approval response was not resolved; the request may be expired or belong to another session')
+
+    return
+  }
+
+  patchOverlayState({ approval: null })
+  patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
+  patchUiState({ status: 'running…' })
+}
 
 const statusColorOf = (status: string, t: { error: string; muted: string; ok: string; warn: string }) => {
   if (status === 'ready') {
@@ -1021,13 +1047,14 @@ export function useMainApp(gw: GatewayClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string) =>
-      respondWith('approval.respond', { choice, session_id: ui.sid }, () => {
-        patchOverlayState({ approval: null })
-        patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
-        patchUiState({ status: 'running…' })
-      }),
-    [respondWith, ui.sid]
+    (choice: string) => {
+      if (!overlay.approval) {
+        return
+      }
+
+      return answerApprovalRequest(rpc, choice, overlay.approval.requestId, ui.sid, sys)
+    },
+    [overlay.approval, rpc, sys, ui.sid]
   )
 
   const answerSudo = useCallback(

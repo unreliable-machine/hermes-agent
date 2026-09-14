@@ -18,6 +18,7 @@ import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
 import { closeWidget, dispatchWidgetInput } from '../sdk/host.js'
 
 import { $agentDockCollapsed } from './agentRoster.js'
+import { approvalResponseResolved } from './approvalResponse.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import {
   type GatewayRpc,
@@ -33,6 +34,34 @@ import { getUiState } from './uiStore.js'
 
 const isCtrl = (key: { ctrl: boolean }, ch: string, target: string) => key.ctrl && ch.toLowerCase() === target
 const DASHBOARD_NEW_SESSION_MESSAGE = 'starting a fresh dashboard chat...'
+
+export async function denyApprovalFromCtrlC(
+  rpc: GatewayRpc,
+  requestId: string,
+  sessionId: null | string,
+  sys: (message: string) => void
+): Promise<void> {
+  if (!requestId) {
+    sys('approval denial was not resolved; the request identifier is missing')
+
+    return
+  }
+
+  const response = await rpc<ApprovalRespondResponse>('approval.respond', {
+    choice: 'deny',
+    request_id: requestId,
+    session_id: sessionId
+  })
+
+  if (!approvalResponseResolved(response)) {
+    sys('approval denial was not resolved; the request may be expired or belong to another session')
+
+    return
+  }
+
+  patchOverlayState({ approval: null })
+  patchTurnState({ outcome: 'denied' })
+}
 
 export const shouldAllowIdleHotkeyExit = (dashboardTuiMode = DASHBOARD_TUI_MODE) => !dashboardTuiMode
 
@@ -228,9 +257,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (overlay.approval) {
-      return gateway
-        .rpc<ApprovalRespondResponse>('approval.respond', { choice: 'deny', session_id: getUiState().sid })
-        .then(r => r && (patchOverlayState({ approval: null }), patchTurnState({ outcome: 'denied' })))
+      return denyApprovalFromCtrlC(gateway.rpc, overlay.approval.requestId, getUiState().sid, actions.sys)
     }
 
     if (overlay.sudo || overlay.secret || overlay.vaultUnlock) {

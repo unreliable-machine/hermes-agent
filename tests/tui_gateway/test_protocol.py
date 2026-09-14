@@ -177,6 +177,28 @@ def test_write_json(capture):
     assert json.loads(buf.getvalue()) == {"test": True}
 
 
+def test_approval_notify_rejects_failed_transport(server, monkeypatch):
+    """A false transport write is a delivery failure, not a rendered prompt."""
+    monkeypatch.setattr(server, "_emit_approval_request", lambda _sid, _data: False)
+
+    with pytest.raises(ConnectionError, match="approval request"):
+        server._notify_approval_request("ui-session", {"request_id": "req-1"})
+
+
+def test_approval_timeout_emits_exact_expiry_event(server, monkeypatch):
+    """The gateway retracts only the request whose backend wait expired."""
+    emitted = []
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda event, sid, payload: emitted.append((event, sid, payload)) or True,
+    )
+
+    server._notify_approval_expired("ui-session", "req-1")
+
+    assert emitted == [("approval.expire", "ui-session", {"request_id": "req-1"})]
+
+
 def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     """A reattached client receives the approval that was emitted while detached."""
     from tools import approval
@@ -621,6 +643,23 @@ def test_approval_response_correlates_request_id(server, monkeypatch):
     assert calls == [("agent-1", "once", {"resolve_all": False, "request_id": "req-1"})]
 
 
+def test_approval_response_requires_request_id(server, monkeypatch):
+    from tools import approval
+
+    server._sessions["ui-1"] = {"session_key": "agent-1", "history": []}
+    monkeypatch.setattr(approval, "resolve_gateway_approval", lambda *_a, **_kw: 1)
+
+    response = server.handle_request(
+        {
+            "id": "r-missing",
+            "method": "approval.respond",
+            "params": {"session_id": "ui-1", "choice": "once"},
+        }
+    )
+
+    assert response["error"]["code"] == 4006
+
+
 def test_approval_respond_falls_back_to_request_id_lookup(server, monkeypatch):
     """A stale live sid must not 4001 an approval answer when the request_id
     resolves to a live session (durable-identity fallback, #91684)."""
@@ -676,13 +715,17 @@ def test_approval_respond_falls_back_to_stored_session_id(server, monkeypatch):
         {
             "id": "r-stored",
             "method": "approval.respond",
-            "params": {"session_id": "stored-91684", "choice": "deny"},
+            "params": {
+                "session_id": "stored-91684",
+                "request_id": "req-stored",
+                "choice": "deny",
+            },
         }
     )
 
     assert response["result"] == {"resolved": 1}
     assert calls == [
-        ("stored-91684", "deny", {"resolve_all": False, "request_id": None})
+        ("stored-91684", "deny", {"resolve_all": False, "request_id": "req-stored"})
     ]
 
 
